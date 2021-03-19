@@ -2,20 +2,18 @@
 
 # Handy script to set multiple aws mfa profiles
 # Note that this script does NOT "switch" any profile upon successful MFA.
-# User is still expected to explicitly use `--profile <mfa'ed profile>` when making aws cli call
+# Note also this script ASSUME your mfa profile = "<non mfa profile name>-mfa"
+# User is still expected to explicitly use `--profile <profile_name>-mfa` when making aws cli call
 #
+# Create your favorite list in ~/.mfacfg with below format, and use -f <list name> option: 
+#       list1=( profile1 profile2 ... )
+#       list2=( profile3 profile4 ... )
+
 # Requirements: jq , aws-cli, bash (not sure if fully posix-compliance), a computer or 2
 # * USE AT YOUR OWN RISK *
 
-# TODO: read from a config file?
-declare -A mfa_map=(
-    # Key=IAM user profile, Value=tempoary session profile with MFA
-    [default]=jackson-mfa
-    [sfdc-security]=sfdc-security-mfa
-    [sfdc-siq-prod]=sfdc-siq-prod-mfa
-    [siq-dev]=siq-dev-mfa
-    [sfdc-siq-build]=sfdc-siq-build-mfa
-)
+readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
+IFS=$'\n' all_non_mfa_profiles=($(sort <<<"${all_non_mfa_profiles_unsort[*]}")); unset IFS
 
 declare -A cred_keyname=(
     [SecretAccessKey]="aws_secret_access_key"
@@ -23,12 +21,13 @@ declare -A cred_keyname=(
     [SessionToken]="aws_session_token"
 )
 
-declare -A run_map
-declare -a keys
+declare -a profiles
 
 function getMFADevice() {
     # TODO: is it a correct assumption that all mfa ARN is like the caller identity ARN with just replacing 'user' with 'mfa'? 
-    local mfa=`aws --profile "$1" sts get-caller-identity | jq '.Arn' -r | sed -e 's/user/mfa/'`
+    # ANS ^: not correct. there could be path. see https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html
+    # update sed to eagerly look up to /
+    local mfa=`aws --profile "$1" sts get-caller-identity | jq '.Arn' -r | sed -e 's|user.*\/|mfa\/|'`
     echo "$mfa"
 }
 
@@ -37,7 +36,7 @@ usage() {
 }
 
 listProfiles() {
-    echo "supported profiles: ${!mfa_map[@]}"
+    echo "supported profiles: ${all_non_mfa_profiles[@]}"
 }
 
 # Make a cleanup function
@@ -46,14 +45,26 @@ cleanup() {
 }
 
 trap cleanup EXIT
-while getopts "ap:lh" opt; do
+
+# Main start
+while getopts "af:p:lh" opt; do
     case $opt in
-        a)  keys=("${!mfa_map[@]}") ;;
+        a)  profiles=("${all_non_mfa_profiles[@]}") ;;
+        f)
+            # TODO validation of favorite list input available in ~/.mfacfg?
+            # TODO need another option to list favorite list?
+            . ~/.mfacfg
+            fav="$OPTARG"
+            # eval evil, but how do i do https://unix.stackexchange.com/questions/222487/bash-dynamic-variable-variable-names for array?
+            for p in $(eval echo "\${$fav[@]}"); do
+               profiles+=("${p}")
+            done
+            ;; 
         p)  
             set -f 
             OIFS=$IFS
             IFS=,
-            keys=($OPTARG)
+            profiles=($OPTARG)
             IFS=$OIFS
             set +f
             ;;  
@@ -68,23 +79,23 @@ while getopts "ap:lh" opt; do
     esac
 done
 
-if [ "${#keys[@]}" -eq 0 ]; then
-    keys=("default")
+if [ "${#profiles[@]}" -eq 0 ]; then
+    profiles=("default")
 fi
 
-for k in "${keys[@]}"; do
-    run_map+=( ["$k"]="${mfa_map["$k"]}" )
-done
-
-for profile_no_mfa in "${!run_map[@]}" ; do
+for profile_no_mfa in "${profiles[@]}" ; do
     mfa="$(getMFADevice $profile_no_mfa)"
-    read -p "Enter AWS Profile [$profile_no_mfa] MFA token: " token
+    read -e -p "Enter AWS Profile [$profile_no_mfa] MFA token: " token
     cred_out=`mktemp`
     # TODO: what if it fails for whatever reason? Do we want to retry? And how many times to retry? Currently it'd just fail that 1 profile and move on to the next
     aws --profile "$profile_no_mfa" sts get-session-token --serial-number $mfa --token-code $token > "$cred_out"
     for k in "${!cred_keyname[@]}"; do
         cred=`cat "$cred_out" | jq ".Credentials.$k" -r`
-        aws configure set "${cred_keyname[$k]}" "$cred" --profile "${run_map[$profile_no_mfa]}"
+        profile_mfa="$profile_no_mfa"-mfa
+        aws configure set "${cred_keyname[$k]}" "$cred" --profile "$profile_mfa"
     done
+    # set region to the mfa profile if not set already
+    region=$(aws configure get region --profile "${profile_no_mfa}")
+    aws configure set region "${region}" --profile "${profile_mfa}"
 done
 
