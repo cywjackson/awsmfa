@@ -32,7 +32,17 @@ function getMFADevice() {
 }
 
 usage() {
-    echo -e "usage: $(basename $0) [-h] [-l] [-a] [-p profile1,profile2,...]\n\tno argument = -p default" 1>&2
+    echo "usage:    $(basename $0) [-h] [-l] [-a] [-f list] [-p profile1,profile2,...]"
+    echo "          no argument = -p default" 
+    echo "" 
+    echo "      -h                          :   Print help usage."
+    echo "      -l                          :   Print supported profiles."
+    echo "      -a                          :   Run the script for ALL supported profiles."
+    echo "      -f list                     :   Run the script for a predefined list of profiles."
+    echo "                                      The list name and profiles should be defined in ~/.mfacfg, with the following format:"
+    echo "                                          list1=( profile1 profile2 ... )"
+    echo "                                          list2=( profile1 profile2 ... )"
+    echo '      -p "profile1,profile2,..."  :   Run the script of specific profile(s), double quote and comma separated'
 }
 
 listProfiles() {
