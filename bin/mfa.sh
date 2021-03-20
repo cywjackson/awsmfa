@@ -12,7 +12,7 @@
 # Requirements: jq , aws-cli, bash (not sure if fully posix-compliance), a computer or 2
 # * USE AT YOUR OWN RISK *
 
-readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
+readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '^\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
 IFS=$'\n' all_non_mfa_profiles=($(sort <<<"${all_non_mfa_profiles_unsort[*]}")); unset IFS
 
 declare -A cred_keyname=(
@@ -104,8 +104,10 @@ for profile_no_mfa in "${profiles[@]}" ; do
         profile_mfa="$profile_no_mfa"-mfa
         aws configure set "${cred_keyname[$k]}" "$cred" --profile "$profile_mfa"
     done
-    # set region to the mfa profile if not set already
+    # set region to the mfa profile if standard profile has specific region
     region=$(aws configure get region --profile "${profile_no_mfa}")
-    aws configure set region "${region}" --profile "${profile_mfa}"
+    if [ -n "${region}" ]; then
+        aws configure set region "${region}" --profile "${profile_mfa}"
+    fi
 done
 
