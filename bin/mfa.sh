@@ -1,4 +1,4 @@
-#! /bin/bash 
+#!/usr/bin/env bash
 
 # Handy script to set multiple aws mfa profiles
 # Note that this script does NOT "switch" any profile upon successful MFA.
@@ -51,12 +51,13 @@ listProfiles() {
 
 # Make a cleanup function
 cleanup() {
-    rm --force -- "${cred_out}"
+    rm  --recursive --force -- "${tempdir}"
 }
 
 trap cleanup EXIT
 
 # Main start
+tempdir="$(mktemp -d "$(basename "$0").XXXXXX")"
 while getopts "af:p:lh" opt; do
     case $opt in
         a)  profiles=("${all_non_mfa_profiles[@]}") ;;
@@ -96,7 +97,7 @@ fi
 for profile_no_mfa in "${profiles[@]}" ; do
     mfa="$(getMFADevice $profile_no_mfa)"
     read -e -p "Enter AWS Profile [$profile_no_mfa] MFA token: " token
-    cred_out=`mktemp`
+    cred_out="$(mktemp -p "${tempdir}")"
     # TODO: what if it fails for whatever reason? Do we want to retry? And how many times to retry? Currently it'd just fail that 1 profile and move on to the next
     aws --profile "$profile_no_mfa" sts get-session-token --serial-number $mfa --token-code $token > "$cred_out"
     for k in "${!cred_keyname[@]}"; do
