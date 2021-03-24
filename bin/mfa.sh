@@ -12,23 +12,19 @@
 # Requirements: jq , aws-cli, bash (not sure if fully posix-compliance), a computer or 2
 # * USE AT YOUR OWN RISK *
 
-readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '^\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
-IFS=$'\n' all_non_mfa_profiles=($(sort <<<"${all_non_mfa_profiles_unsort[*]}")); unset IFS
+# Make a cleanup function
+cleanup() {
+    rm  --recursive --force -- "${tempdir}"
+}
 
-declare -A cred_keyname=(
-    [SecretAccessKey]="aws_secret_access_key"
-    [AccessKeyId]="aws_access_key_id"
-    [SessionToken]="aws_session_token"
-)
+trap cleanup EXIT
 
-declare -a profiles
-
-function getMFADevice() {
+getMFADevice() {
     # TODO: is it a correct assumption that all mfa ARN is like the caller identity ARN with just replacing 'user' with 'mfa'? 
     # ANS ^: not correct. there could be path. see https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html
     # update sed to eagerly look up to /
-    local mfa=`aws --profile "$1" sts get-caller-identity | jq '.Arn' -r | sed -e 's|user.*\/|mfa\/|'`
-    echo "$mfa"
+    local mfa=`aws --profile "${1}" sts get-caller-identity | jq '.Arn' -r | sed -e 's|user.*\/|mfa\/|'`
+    echo "${mfa}"
 }
 
 usage() {
@@ -49,23 +45,29 @@ listProfiles() {
     echo "supported profiles: ${all_non_mfa_profiles[@]}"
 }
 
-# Make a cleanup function
-cleanup() {
-    rm  --recursive --force -- "${tempdir}"
-}
-
-trap cleanup EXIT
-
 # Main start
-tempdir="$(mktemp -d "$(basename "$0").XXXXXX")"
+# TODO: use aws cli v2 to take advantage of aws configure list-profiles , but need to check breaking changes:
+# https://docs.aws.amazon.com/cli/latest/userguide/cliv2-migration.html
+readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '^\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
+IFS=$'\n' all_non_mfa_profiles=($(sort <<<"${all_non_mfa_profiles_unsort[*]}")); unset IFS
+
+declare -A cred_keyname=(
+    [SecretAccessKey]="aws_secret_access_key"
+    [AccessKeyId]="aws_access_key_id"
+    [SessionToken]="aws_session_token"
+)
+
+declare -a profiles
+
+tempdir="$(mktemp -d)"
 while getopts "af:p:lh" opt; do
-    case $opt in
+    case "${opt}" in
         a)  profiles=("${all_non_mfa_profiles[@]}") ;;
         f)
             # TODO validation of favorite list input available in ~/.mfacfg?
-            # TODO need another option to list favorite list?
+            # TODO need another option to list favorite list? which is basically `cat ~/.mfgcfg` ?
             . ~/.mfacfg
-            fav="$OPTARG"
+            fav="${OPTARG}"
             # eval evil, but how do i do https://unix.stackexchange.com/questions/222487/bash-dynamic-variable-variable-names for array?
             for p in $(eval echo "\${$fav[@]}"); do
                profiles+=("${p}")
@@ -73,10 +75,10 @@ while getopts "af:p:lh" opt; do
             ;; 
         p)  
             set -f 
-            OIFS=$IFS
+            OIFS="${IFS}"
             IFS=,
             profiles=($OPTARG)
-            IFS=$OIFS
+            IFS="${OIFS}"
             set +f
             ;;  
         l)  listProfiles
@@ -95,17 +97,17 @@ if [ "${#profiles[@]}" -eq 0 ]; then
 fi
 
 for profile_no_mfa in "${profiles[@]}" ; do
-    mfa="$(getMFADevice $profile_no_mfa)"
-    read -e -p "Enter AWS Profile [$profile_no_mfa] MFA token: " token
+    mfa="$(getMFADevice ${profile_no_mfa})"
+    read -e -p "Enter AWS Profile [${profile_no_mfa}] MFA token: " token
     cred_out="$(mktemp -p "${tempdir}")"
     # TODO: what if it fails for whatever reason? Do we want to retry? And how many times to retry? Currently it'd just fail that 1 profile and move on to the next
-    aws --profile "$profile_no_mfa" sts get-session-token --serial-number $mfa --token-code $token > "$cred_out"
+    aws --profile "${profile_no_mfa}" sts get-session-token --serial-number ${mfa} --token-code ${token} > "${cred_out}"
     for k in "${!cred_keyname[@]}"; do
-        cred=`cat "$cred_out" | jq ".Credentials.$k" -r`
-        profile_mfa="$profile_no_mfa"-mfa
-        aws configure set "${cred_keyname[$k]}" "$cred" --profile "$profile_mfa"
+        cred=`cat "${cred_out}" | jq ".Credentials.${k}" -r`
+        profile_mfa="${profile_no_mfa}"-mfa
+        aws configure set "${cred_keyname[${k}]}" "${cred}" --profile "${profile_mfa}"
     done
-    # set region to the mfa profile if standard profile has specific region
+    # set region to the mfa profile only if standard profile has specific region
     region=$(aws configure get region --profile "${profile_no_mfa}")
     if [ -n "${region}" ]; then
         aws configure set region "${region}" --profile "${profile_mfa}"
