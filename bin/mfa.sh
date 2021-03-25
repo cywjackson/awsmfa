@@ -48,8 +48,7 @@ listProfiles() {
 # Main start
 # TODO: use aws cli v2 to take advantage of aws configure list-profiles , but need to check breaking changes:
 # https://docs.aws.amazon.com/cli/latest/userguide/cliv2-migration.html
-readarray -t all_non_mfa_profiles_unsort < <(cat ~/.aws/credentials | grep -o '^\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
-IFS=$'\n' all_non_mfa_profiles=($(sort <<<"${all_non_mfa_profiles_unsort[*]}")); unset IFS
+readarray -t all_non_mfa_profiles < <(cat ~/.aws/credentials | grep -o '^\[[^]]*\]' | grep -v "\-mfa" | tr -d '[]')
 
 declare -A cred_keyname=(
     [SecretAccessKey]="aws_secret_access_key"
@@ -96,7 +95,8 @@ if [ "${#profiles[@]}" -eq 0 ]; then
     profiles=("default")
 fi
 
-for profile_no_mfa in "${profiles[@]}" ; do
+IFS=$'\n' profiles_sorted=($(sort <<<"${profiles[*]}")); unset IFS
+for profile_no_mfa in "${profiles_sorted[@]}" ; do
     mfa="$(getMFADevice ${profile_no_mfa})"
     read -e -p "Enter AWS Profile [${profile_no_mfa}] MFA token: " token
     cred_out="$(mktemp -p "${tempdir}")"
